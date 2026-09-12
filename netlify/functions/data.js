@@ -1,3 +1,4 @@
+
 // netlify/functions/data.js
 // GET  -> devuelve el estado guardado del docente (cursos, estudiantes, etc.)
 // POST -> guarda/actualiza ese estado.
@@ -11,7 +12,7 @@ exports.handler = async (event) => {
     return jsonResponse(401, { error: 'Sesión inválida o expirada. Inicia sesión de nuevo.' });
   }
 
-  const store = usersStore();
+  const store = usersStore(event);
 
   try {
     if (event.httpMethod === 'GET') {
