@@ -1,0 +1,15 @@
+[build]
+  command = "npm install"
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Redirige las llamadas del frontend (/.netlify/functions/...) directamente
+# a las funciones; esto ya es el comportamiento por defecto de Netlify,
+# se deja explícito para evitar dudas al desplegar.
+[[redirects]]
+  from = "/.netlify/functions/*"
+  to = "/.netlify/functions/:splat"
+  status = 200

@@ -1,0 +1,14 @@
+{
+  "name": "aula-digital",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AulaDigital - app para docentes con login y guardado en la nube (Netlify Functions + Blobs)",
+  "scripts": {
+    "build": "echo 'No build step, sitio estático'"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^7.4.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
