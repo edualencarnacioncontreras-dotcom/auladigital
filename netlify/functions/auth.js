@@ -4,7 +4,7 @@
 // y de dar acceso al "store" (Netlify Blobs) donde se guardan las cuentas.
 
 const jwt = require('jsonwebtoken');
-const { getStore } = require('@netlify/blobs');
+const { getStore, connectLambda } = require('@netlify/blobs');
 
 // En producción, define la variable de entorno JWT_SECRET en Netlify
 // (Site settings -> Environment variables). Si no existe, se usa un
@@ -12,7 +12,13 @@ const { getStore } = require('@netlify/blobs');
 // configurar tu propia clave.
 const JWT_SECRET = process.env.JWT_SECRET || 'aula-digital-clave-por-defecto-cambiar';
 
-function usersStore() {
+// Nuestras funciones usan el formato clásico "exports.handler = async
+// (event) => {...}" (modo de compatibilidad con AWS Lambda). En ese modo,
+// Netlify NO inyecta automáticamente el contexto de Blobs, así que hay que
+// activarlo manualmente con connectLambda(event) antes de pedir el store.
+// Por eso usersStore() recibe "event": lo necesita para esa conexión.
+function usersStore(event) {
+  connectLambda(event);
   return getStore('aula-digital-users');
 }
 
