@@ -28,7 +28,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    const store = usersStore();
+    const store = usersStore(event);
     const existente = await store.get(correo, { type: 'json' });
     if (existente) {
       return jsonResponse(409, { error: 'Ya existe una cuenta con ese correo.' });
