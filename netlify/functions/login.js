@@ -24,7 +24,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    const store = usersStore();
+    const store = usersStore(event);
     const registro = await store.get(correo, { type: 'json' });
     if (!registro) {
       return jsonResponse(401, { error: 'Correo o contraseña incorrectos.' });
