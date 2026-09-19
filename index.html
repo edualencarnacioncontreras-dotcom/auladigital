@@ -515,6 +515,22 @@
   .adec-cat-item .plus{color:var(--blue); font-weight:800; flex-shrink:0;}
   .adec-empty-cat{padding:44px 16px; text-align:center; color:var(--muted); font-size:12.5px; line-height:1.6;}
 
+  /* ---- Cuadro Curricular: tabla de distribución por periodos ---- */
+  .cc-toolbar{display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; flex-wrap:wrap;}
+  .cc-toolbar-actions{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+  .cc-table-wrap{overflow-x:auto; background:#fff; border:1px solid var(--border); border-radius:10px;}
+  .cc-table{width:100%; border-collapse:collapse; font-size:12.5px; min-width:1050px;}
+  .cc-table th{background:var(--blue-light); color:var(--navy-2); font-weight:700; font-size:11px; letter-spacing:.2px; text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); border-right:1px solid var(--border); white-space:pre-line;}
+  .cc-table td{padding:8px; border-bottom:1px solid var(--border); border-right:1px solid var(--border); vertical-align:top;}
+  .cc-table tr:last-child td{border-bottom:none;}
+  .cc-table th:last-child, .cc-table td:last-child{border-right:none;}
+  .cc-fund-cell{font-weight:700; font-size:11.5px; color:var(--navy-2); width:150px; background:#fbfcfd;}
+  .cc-table textarea{width:100%; min-width:200px; border:1px solid transparent; border-radius:6px; padding:7px 8px; font-size:12px; font-family:inherit; line-height:1.4; resize:vertical; background:transparent; color:var(--text);}
+  .cc-table textarea:hover{border-color:var(--border);}
+  .cc-table textarea:focus{outline:none; border-color:var(--blue); background:#fff;}
+  .cc-ia-input{width:230px; padding:9px 11px; border:1px solid var(--border); border-radius:7px; font-size:12.5px; font-family:inherit;}
+  .cc-hint{background:#fff; border:1px solid var(--border); border-radius:10px; padding:13px 16px; font-size:12.5px; color:var(--muted); margin-bottom:14px;}
+
   /* ---- Recuperación y ajustes: fichas del curso entero ---- */
   .recup-row{border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:0 10px 10px;}
   .recup-row-head{display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6px;}
@@ -1639,6 +1655,7 @@ const navItems = [
   {key:"planificaciones", label:"Planificaciones"},
   {key:"instrumentos", label:"Instrumentos"},
   {key:"secuencias", label:"Secuencias Didácticas"},
+  {key:"cuadro", label:"Cuadro Curricular"},
   {section:"Registro"},
   {key:"estudiantes", label:"Estudiantes"},
   {key:"asistencia", label:"Asistencia"},
@@ -1771,6 +1788,7 @@ const pageRenderers = {
   planificaciones: renderPlanificaciones,
   instrumentos: renderInstrumentos,
   secuencias: renderSecuencias,
+  cuadro: renderCuadroCurricular,
   estudiantes: renderEstudiantes,
   asistencia: renderAsistencia,
   calificaciones: renderCalificaciones,
@@ -1788,7 +1806,7 @@ const pageRenderers = {
 
 /* Páginas cuyo contenido debe usar todo el ancho disponible en vez del
    ancho angosto por defecto (formularios cortos, tarjetas, etc.) */
-const WIDE_CONTENT_PAGES = ['aula','planificaciones','instrumentos','secuencias','estudiantes','asistencia','calificaciones','adecuacion','recuperacion','anecdotico','libro','horario','agenda','recursos','boletines','centro'];
+const WIDE_CONTENT_PAGES = ['aula','planificaciones','instrumentos','secuencias','cuadro','estudiantes','asistencia','calificaciones','adecuacion','recuperacion','anecdotico','libro','horario','agenda','recursos','boletines','centro'];
 function renderContent(){
   renderAulaBanner();
   const el = document.getElementById('content');
@@ -5004,8 +5022,27 @@ function adecCatalogFromFields(courseId, fields){
   });
   return list;
 }
-function adecCompetenciasCatalog(courseId){ return adecCatalogFromFields(courseId, ['compFundamentales','compEspecificas']); }
-function adecIndicadoresCatalog(courseId){ return adecCatalogFromFields(courseId, ['indicadores']); }
+/* Junta varias listas de texto sin repetir (comparando sin mayúsculas/minúsculas),
+   respetando el orden de aparición. */
+function mergeUniqueLines(...lists){
+  const seen = new Set();
+  const out = [];
+  lists.forEach(list=>list.forEach(line=>{
+    const k = line.toLowerCase();
+    if(!seen.has(k)){ seen.add(k); out.push(line); }
+  }));
+  return out;
+}
+function adecCompetenciasCatalog(courseId){
+  const desdeCuadro = cuadroCompetenciasCatalog(courseId, adecFilters.asignatura);
+  const desdePlanificaciones = adecCatalogFromFields(courseId, ['compFundamentales','compEspecificas']);
+  return mergeUniqueLines(desdeCuadro, desdePlanificaciones);
+}
+function adecIndicadoresCatalog(courseId){
+  const desdeCuadro = cuadroIndicadoresCatalog(courseId, adecFilters.asignatura, adecPeriodo);
+  const desdePlanificaciones = adecCatalogFromFields(courseId, ['indicadores']);
+  return mergeUniqueLines(desdeCuadro, desdePlanificaciones);
+}
 function adecConceptosCatalog(courseId){ return adecCatalogFromFields(courseId, ['contConceptuales']); }
 function adecPlanningsCatalog(courseId){
   return adecCoursePlannings(courseId).map(p=>({
@@ -5340,6 +5377,469 @@ function renderAdecCatalogPanel(courseId){
         ${body}
       </div>
     </div>`;
+}
+
+/* =========================================================
+   CUADRO CURRICULAR
+   ---------------------------------------------------------
+   Tabla oficial de distribución de competencias e indicadores
+   de logro por periodo (1-4), por Centro+Grado+Sección+Asignatura.
+   Las 7 Competencias Fundamentales son fijas (marco curricular
+   dominicano); lo que se llena es la Competencia Específica del
+   Grado y los indicadores de cada periodo. Lo que aquí se escribe
+   alimenta automáticamente el catálogo de "Adecuación curricular"
+   (pestañas Competencias / Indicadores), igual que ya hacen las
+   Planificaciones — ver cuadroCompetenciasCatalog/cuadroIndicadoresCatalog
+   más abajo y su uso dentro de adecCompetenciasCatalog/adecIndicadoresCatalog. ---- */
+let cuadroFilters = { centro:'', grado:'', seccion:'', asignatura:'' };
+let cuadroDirty = false;
+let cuadroIaContexto = '';
+let cuadroIaVocab = '';
+let cuadroIaBusy = false;
+
+const CUADRO_COMPETENCIAS_FUNDAMENTALES = [
+  'COMUNICATIVA',
+  'PENSAMIENTO LÓGICO, CREATIVO Y CRÍTICO',
+  'RESOLUCIÓN DE PROBLEMAS',
+  'ÉTICA Y CIUDADANA',
+  'CIENTÍFICA Y TECNOLÓGICA',
+  'AMBIENTAL Y DE LA SALUD',
+  'DESARROLLO PERSONAL Y ESPIRITUAL'
+];
+const CUADRO_PERIODO_LABELS = ['PERIODO 1\nComprensión','PERIODO 2\nProducción','PERIODO 3\nInteracción','PERIODO 4\nIntegración y consolidación'];
+
+let cuadrosCurriculares = []; // {id, courseId, asignatura, filas:[{fundamental, especifica, periodo1..4}]}
+
+function blankCuadroFilas(){
+  return CUADRO_COMPETENCIAS_FUNDAMENTALES.map(f=>({fundamental:f, especifica:'', periodo1:'', periodo2:'', periodo3:'', periodo4:''}));
+}
+function findCuadro(courseId, asignatura){
+  return cuadrosCurriculares.find(c=>c.courseId===courseId && c.asignatura===asignatura);
+}
+function ensureCuadro(courseId, asignatura){
+  let c = findCuadro(courseId, asignatura);
+  if(!c){
+    c = { id:uid(), courseId, asignatura, filas: blankCuadroFilas() };
+    cuadrosCurriculares.push(c);
+  }
+  // Por si un cuadro quedó guardado con menos filas que el marco actual (no debería pasar, pero cubre datos antiguos)
+  if(!Array.isArray(c.filas) || c.filas.length===0) c.filas = blankCuadroFilas();
+  return c;
+}
+
+function autoSelectCuadroFilters(){
+  const f = cuadroFilters;
+  const centros = centrosList();
+  if(!f.centro) f.centro = defaultCentro();
+  if(f.centro && !centros.includes(f.centro)) f.centro = defaultCentro();
+  if(f.centro){
+    const grados = gradosList(f.centro);
+    if(!f.grado && grados.length===1) f.grado = grados[0];
+  }
+  if(f.centro && f.grado){
+    const secciones = seccionesList(f.centro, f.grado);
+    if(!f.seccion && secciones.length===1) f.seccion = secciones[0];
+  }
+  if(f.centro && f.grado && f.seccion){
+    const course = findCourseByFilters(f.centro, f.grado, f.seccion);
+    if(course){
+      const asigs = courseSubjects(course);
+      if(!f.asignatura && asigs.length===1) f.asignatura = asigs[0];
+    }
+  }
+}
+function setCuadroFilter(key, value){
+  cuadroFilters[key] = value;
+  if(key==='centro'){ cuadroFilters.grado=''; cuadroFilters.seccion=''; cuadroFilters.asignatura=''; }
+  if(key==='grado'){ cuadroFilters.seccion=''; cuadroFilters.asignatura=''; }
+  if(key==='seccion'){ cuadroFilters.asignatura=''; }
+  renderContent();
+}
+function setCuadroIaContexto(v){ cuadroIaContexto = v; }
+function setCuadroIaVocab(v){ cuadroIaVocab = v; }
+
+/* ---- IA real (opcional): si el docente pega su propia API key de Anthropic
+   (console.anthropic.com), "Rellenar con IA" deja de usar el generador por
+   plantilla y llama de verdad a Claude, así el contenido sale distinto cada
+   vez y ajustado con precisión al tema/vocabulario que se escriba. La key
+   se guarda solo en este navegador (localStorage), nunca se envía a otro
+   lado que no sea api.anthropic.com. ---- */
+function cuadroApiKey(){ return (localStorage.getItem('aulaDigital_apiKey') || '').trim(); }
+function configurarIaReal(){
+  const actual = cuadroApiKey();
+  const key = prompt('Pega tu API key de Anthropic (la obtienes en console.anthropic.com) para que "Rellenar con IA" use un modelo real y genere contenido distinto cada vez.\n\nSe guarda solo en este navegador; nunca se envía a otro sitio que no sea api.anthropic.com.\n\nDéjalo en blanco y acepta para desactivarla y volver al generador por plantilla.', actual);
+  if(key===null) return; // canceló
+  if(key.trim()) localStorage.setItem('aulaDigital_apiKey', key.trim());
+  else localStorage.removeItem('aulaDigital_apiKey');
+  renderContent();
+}
+
+function editCuadroCelda(filaIdx, campo, valor){
+  const f = cuadroFilters;
+  const course = findCourseByFilters(f.centro, f.grado, f.seccion);
+  if(!course || !f.asignatura) return;
+  const c = ensureCuadro(course.id, f.asignatura);
+  if(!c.filas[filaIdx]) return;
+  c.filas[filaIdx][campo] = valor;
+  cuadroDirty = true;
+  scheduleSave();
+}
+function guardarCuadro(){
+  cuadroDirty = false;
+  renderContent();
+  scheduleSave();
+}
+
+/* Devuelve un elemento al azar de un arreglo (para que cada clic en
+   "Rellenar con IA" varíe el resultado, en vez de repetir siempre lo mismo). */
+function pickVariant(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+/* Banco de frases para la Competencia Específica del Grado, por Competencia
+   Fundamental. Varias variantes por competencia para que el resultado no
+   sea idéntico cada vez que se genera. */
+const CUADRO_VERBOS_ESPECIFICA = {
+  'COMUNICATIVA': [
+    (t,a)=>`Comprende y expresa, de forma oral y escrita, ideas relacionadas con ${t} en el contexto de ${a}.`,
+    (t,a)=>`Interpreta y produce mensajes claros sobre ${t}, adecuados a distintas situaciones comunicativas de ${a}.`,
+    (t,a)=>`Describe y explica ${t} utilizando el vocabulario y las estructuras propias de ${a}.`,
+    (t,a)=>`Dialoga y argumenta sobre ${t}, adaptando su lenguaje a la audiencia y al propósito comunicativo.`
+  ],
+  'PENSAMIENTO LÓGICO, CREATIVO Y CRÍTICO': [
+    (t,a)=>`Analiza y compara distintos aspectos de ${t}, formulando conclusiones propias.`,
+    (t,a)=>`Cuestiona y argumenta con criterios propios sobre ${t}, apoyándose en evidencias.`,
+    (t,a)=>`Propone ideas originales para abordar ${t} desde distintas perspectivas.`,
+    (t,a)=>`Clasifica y organiza la información relacionada con ${t} siguiendo criterios lógicos.`
+  ],
+  'RESOLUCIÓN DE PROBLEMAS': [
+    (t,a)=>`Aplica lo aprendido en ${a} para resolver situaciones cotidianas relacionadas con ${t}.`,
+    (t,a)=>`Diseña y pone en práctica estrategias para resolver problemas vinculados a ${t}.`,
+    (t,a)=>`Utiliza distintos procedimientos para abordar situaciones desafiantes relacionadas con ${t}.`,
+    (t,a)=>`Evalúa alternativas de solución ante situaciones relacionadas con ${t}.`
+  ],
+  'ÉTICA Y CIUDADANA': [
+    (t,a)=>`Respeta y valora distintos puntos de vista al trabajar ${t} en equipo.`,
+    (t,a)=>`Actúa con responsabilidad y honestidad al abordar ${t} en el aula y fuera de ella.`,
+    (t,a)=>`Reconoce la diversidad cultural y social presente al tratar ${t}.`,
+    (t,a)=>`Participa de forma activa y solidaria en actividades relacionadas con ${t}.`
+  ],
+  'CIENTÍFICA Y TECNOLÓGICA': [
+    (t,a)=>`Investiga y organiza información confiable sobre ${t}, apoyándose en herramientas tecnológicas.`,
+    (t,a)=>`Utiliza recursos digitales para explorar, representar y comunicar ${t}.`,
+    (t,a)=>`Formula preguntas e hipótesis sencillas relacionadas con ${t} y busca evidencias para responderlas.`,
+    (t,a)=>`Recopila, organiza y presenta datos relacionados con ${t} usando distintos formatos.`
+  ],
+  'AMBIENTAL Y DE LA SALUD': [
+    (t,a)=>`Reconoce la relación entre ${t} y el cuidado del ambiente y la salud.`,
+    (t,a)=>`Promueve hábitos saludables y de cuidado ambiental al trabajar ${t}.`,
+    (t,a)=>`Relaciona ${t} con acciones concretas de autocuidado y sostenibilidad.`,
+    (t,a)=>`Valora la importancia de un entorno sano al abordar ${t}.`
+  ],
+  'DESARROLLO PERSONAL Y ESPIRITUAL': [
+    (t,a)=>`Reflexiona sobre sus propios logros y dificultades al trabajar ${t}.`,
+    (t,a)=>`Expresa con confianza sus ideas, emociones e intereses relacionados con ${t}.`,
+    (t,a)=>`Colabora con empatía y respeto en actividades grupales relacionadas con ${t}.`,
+    (t,a)=>`Reconoce sus fortalezas personales al enfrentar retos relacionados con ${t}.`
+  ]
+};
+/* Banco de frases por periodo (Comprensión, Producción, Interacción,
+   Integración), independiente de la competencia fundamental, también con
+   varias variantes. */
+const CUADRO_MARCOS_PERIODO = [
+  [ // Periodo 1 · Comprensión
+    t=>`Identifica y explica las ideas principales sobre ${t} a partir de la observación, la escucha o la lectura guiada.`,
+    t=>`Reconoce información específica y general sobre ${t} en textos, imágenes o situaciones sencillas.`,
+    t=>`Responde con claridad preguntas de comprensión relacionadas con ${t}.`,
+    t=>`Distingue las ideas relevantes de las secundarias al abordar ${t}.`
+  ],
+  [ // Periodo 2 · Producción
+    t=>`Produce trabajos, respuestas o explicaciones propias, breves y coherentes, sobre ${t}.`,
+    t=>`Elabora producciones orales o escritas sencillas relacionadas con ${t}.`,
+    t=>`Aplica lo aprendido sobre ${t} en ejercicios y tareas guiadas.`,
+    t=>`Construye ejemplos propios relacionados con ${t}.`
+  ],
+  [ // Periodo 3 · Interacción
+    t=>`Interactúa oralmente o por escrito con sus pares para compartir información y puntos de vista sobre ${t}.`,
+    t=>`Colabora en actividades grupales para profundizar en ${t}, respetando distintas opiniones.`,
+    t=>`Negocia significados con sus compañeros al trabajar situaciones relacionadas con ${t}.`,
+    t=>`Comparte y contrasta sus ideas sobre ${t} con las de sus compañeros.`
+  ],
+  [ // Periodo 4 · Integración y consolidación
+    t=>`Integra y consolida lo trabajado en los periodos anteriores sobre ${t} mediante una tarea o proyecto final.`,
+    t=>`Aplica de manera autónoma lo aprendido sobre ${t} en una producción o evaluación de desempeño.`,
+    t=>`Demuestra el nivel de logro alcanzado sobre ${t} en una situación evaluativa integradora.`,
+    t=>`Presenta una producción final que evidencia el dominio de ${t}.`
+  ]
+];
+/* Motor por plantilla (sin backend ni llave de API): combina banco de frases
+   + tema + vocabulario al azar en cada llamada, así deja de repetir siempre
+   el mismo texto. Se usa cuando no hay una API key de IA real configurada. */
+function generarFilasPlantilla(asignatura, tema, vocab){
+  const temaBase = tema && tema.trim() ? `"${tema.trim()}"` : `los contenidos de ${asignatura} de este grado`;
+  const temaConVocab = (vocab && vocab.trim()) ? `${temaBase} (incorporando: ${vocab.trim()})` : temaBase;
+  return CUADRO_COMPETENCIAS_FUNDAMENTALES.map(fundamental=>{
+    const especificaFn = pickVariant(CUADRO_VERBOS_ESPECIFICA[fundamental] || CUADRO_VERBOS_ESPECIFICA['COMUNICATIVA']);
+    return {
+      fundamental,
+      especifica: especificaFn(temaConVocab, asignatura),
+      periodo1: pickVariant(CUADRO_MARCOS_PERIODO[0])(temaBase),
+      periodo2: pickVariant(CUADRO_MARCOS_PERIODO[1])(temaBase),
+      periodo3: pickVariant(CUADRO_MARCOS_PERIODO[2])(temaBase),
+      periodo4: pickVariant(CUADRO_MARCOS_PERIODO[3])(temaBase)
+    };
+  });
+}
+
+/* IA real: llama al endpoint público de Anthropic con la API key que el
+   propio docente configuró (ver configurarIaReal). Pide un JSON estricto de
+   7 filas y lo valida antes de usarlo. */
+async function llamarIaCuadro(apiKey, asignatura, grado, tema, vocab){
+  const prompt = `Eres un experto en diseño curricular del sistema educativo dominicano (MINERD), especializado en el enfoque por competencias del Diseño Curricular vigente.
+
+Genera el contenido de un Cuadro Curricular para la asignatura "${asignatura}", grado "${grado}"${tema && tema.trim() ? `, con este eje temático o unidad: "${tema.trim()}"` : ''}${vocab && vocab.trim() ? `, incorporando este vocabulario o contenidos clave: ${vocab.trim()}` : ''}.
+
+Para cada una de estas 7 Competencias Fundamentales, en este orden exacto:
+${CUADRO_COMPETENCIAS_FUNDAMENTALES.map((f,i)=>`${i+1}. ${f}`).join('\n')}
+
+Escribe:
+- "especifica": una Competencia Específica del Grado (una oración concreta y verificable, propia de esa competencia fundamental y de la asignatura).
+- "periodo1": indicador de logro de Comprensión.
+- "periodo2": indicador de logro de Producción.
+- "periodo3": indicador de logro de Interacción.
+- "periodo4": indicador de logro de Integración y consolidación.
+
+Responde ÚNICAMENTE con un array JSON válido de 7 objetos, en el mismo orden que la lista de arriba, cada uno con las claves: fundamental, especifica, periodo1, periodo2, periodo3, periodo4. No incluyas texto antes ni después del JSON, ni bloques de código con backticks.`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-direct-browser-access':'true'
+    },
+    body: JSON.stringify({
+      model:'claude-sonnet-5',
+      max_tokens: 2200,
+      messages:[{ role:'user', content: prompt }]
+    })
+  });
+  if(!response.ok){
+    let detalle = '';
+    try{ detalle = (await response.json()).error?.message || ''; } catch(e){}
+    throw new Error(`HTTP ${response.status}${detalle ? ': '+detalle : ''}`);
+  }
+  const data = await response.json();
+  const texto = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+  const limpio = texto.replace(/```json|```/g,'').trim();
+  const parsed = JSON.parse(limpio);
+  if(!Array.isArray(parsed) || parsed.length===0) throw new Error('La IA no devolvió un listado válido.');
+  return CUADRO_COMPETENCIAS_FUNDAMENTALES.map((fundamental, i)=>{
+    const row = parsed[i] || parsed.find(r=>r.fundamental===fundamental) || {};
+    return {
+      fundamental,
+      especifica: row.especifica || '',
+      periodo1: row.periodo1 || '',
+      periodo2: row.periodo2 || '',
+      periodo3: row.periodo3 || '',
+      periodo4: row.periodo4 || ''
+    };
+  });
+}
+
+/* Catálogo oficial de Inglés 3ro/4to de Secundaria: se carga tal cual cuando
+   el docente pulsa "Rellenar con IA" en esa combinación sin escribir un tema
+   propio (si escribe un tema, se genera contenido ajustado a ese tema en
+   vez del cuadro oficial genérico). */
+const CUADRO_PLANTILLA_INGLES_SECUNDARIA = [
+  { fundamental:'COMUNICATIVA', especifica:'Interactúa en inglés, de forma oral y escrita, en situaciones comunicativas sencillas de su entorno cercano, utilizando el vocabulario y las estructuras gramaticales propias del grado.',
+    periodo1:'Comprende e identifica información específica y general en textos orales y escritos breves y sencillos relacionados con temas cotidianos.',
+    periodo2:'Produce textos orales y escritos breves y sencillos, utilizando el vocabulario y las estructuras gramaticales trabajadas.',
+    periodo3:'Interactúa oralmente y por escrito con sus pares y su entorno para intercambiar información, opiniones y puntos de vista sobre temas cotidianos.',
+    periodo4:'Integra y aplica de manera autónoma lo aprendido en los periodos anteriores en una producción o tarea final que evidencia su nivel de logro.' },
+  { fundamental:'PENSAMIENTO LÓGICO, CREATIVO Y CRÍTICO', especifica:'Utiliza el idioma inglés como herramienta para analizar, comparar y organizar información de manera lógica y creativa.',
+    periodo1:'Identifica y clasifica información relevante a partir de la escucha o lectura de textos sencillos en inglés.',
+    periodo2:'Organiza sus ideas de forma lógica y coherente al producir textos orales y escritos sencillos.',
+    periodo3:'Compara puntos de vista propios y de otros sobre un mismo tema, argumentando de forma sencilla en inglés.',
+    periodo4:'Resuelve, en inglés, situaciones o tareas que requieren aplicar el pensamiento lógico y creativo de forma integrada.' },
+  { fundamental:'RESOLUCIÓN DE PROBLEMAS', especifica:'Aplica el idioma inglés para plantear y resolver situaciones comunicativas propias de su vida cotidiana y escolar.',
+    periodo1:'Reconoce situaciones comunicativas sencillas y el vocabulario necesario para abordarlas en inglés.',
+    periodo2:'Propone soluciones sencillas, en inglés, a situaciones comunicativas de su entorno cercano.',
+    periodo3:'Negocia significados en inglés con sus pares para resolver malentendidos o vacíos de información.',
+    periodo4:'Resuelve de manera autónoma una situación comunicativa integradora utilizando el inglés como herramienta.' },
+  { fundamental:'ÉTICA Y CIUDADANA', especifica:'Se comunica en inglés con cortesía y respeto, valorando la diversidad cultural y las normas de convivencia.',
+    periodo1:'Reconoce fórmulas de cortesía y normas de convivencia en inglés propias de distintos contextos culturales.',
+    periodo2:'Utiliza fórmulas de cortesía en inglés al producir textos orales y escritos.',
+    periodo3:'Interactúa con respeto y empatía en inglés, valorando las opiniones y la cultura de los demás.',
+    periodo4:'Demuestra, en una tarea integradora, actitudes de respeto y cortesía al comunicarse en inglés.' },
+  { fundamental:'CIENTÍFICA Y TECNOLÓGICA', especifica:'Utiliza recursos impresos y digitales en inglés para localizar, organizar y comunicar información.',
+    periodo1:'Localiza información específica en textos e imágenes en inglés, impresos o digitales.',
+    periodo2:'Organiza y presenta información en inglés apoyándose en recursos impresos o digitales.',
+    periodo3:'Comunica, oralmente o por escrito, información obtenida de fuentes en inglés, con apoyo de recursos tecnológicos.',
+    periodo4:'Elabora una producción final en inglés que integra información obtenida de diversas fuentes y recursos.' },
+  { fundamental:'AMBIENTAL Y DE LA SALUD', especifica:'Expresa en inglés actitudes favorables hacia el cuidado del ambiente y estilos de vida saludables.',
+    periodo1:'Identifica vocabulario en inglés relacionado con el cuidado del ambiente y la salud.',
+    periodo2:'Produce oraciones y textos breves en inglés sobre hábitos saludables y cuidado ambiental.',
+    periodo3:'Comparte en inglés, con sus pares, recomendaciones sobre salud y medio ambiente.',
+    periodo4:'Elabora una producción final en inglés que promueve el cuidado ambiental o la salud.' },
+  { fundamental:'DESARROLLO PERSONAL Y ESPIRITUAL', especifica:'Utiliza el inglés para expresar sus emociones, intereses y opiniones personales con confianza.',
+    periodo1:'Reconoce vocabulario en inglés para expresar emociones, gustos e intereses personales.',
+    periodo2:'Produce textos orales y escritos breves en inglés sobre sí mismo, sus gustos e intereses.',
+    periodo3:'Comparte en inglés sus opiniones e intereses personales, respetando los de sus compañeros.',
+    periodo4:'Presenta, en inglés, una producción final que refleja su desarrollo personal a lo largo del periodo.' }
+];
+
+async function generarCuadroConIA(){
+  if(cuadroIaBusy) return;
+  const f = cuadroFilters;
+  const course = findCourseByFilters(f.centro, f.grado, f.seccion);
+  if(!course || !f.asignatura) return;
+  const c = ensureCuadro(course.id, f.asignatura);
+  const asigNorm = f.asignatura.trim().toLowerCase();
+  const gradoNorm = (f.grado||'').trim().toLowerCase();
+  const tema = (cuadroIaContexto||'').trim();
+  const vocab = (cuadroIaVocab||'').trim();
+  const esInglesSecundaria3ro4to = asigNorm.includes('ingl') && (gradoNorm==='3ro' || gradoNorm==='4to');
+  const apiKey = cuadroApiKey();
+
+  if(apiKey){
+    cuadroIaBusy = true;
+    renderContent();
+    try{
+      c.filas = await llamarIaCuadro(apiKey, f.asignatura, f.grado, tema, vocab);
+      cuadroDirty = true;
+    } catch(err){
+      alert('No se pudo generar con IA real: ' + (err.message || err) + '\n\nSe usará el generador por plantilla en su lugar. Revisa tu API key con el botón ⚙️.');
+      c.filas = generarFilasPlantilla(f.asignatura, tema, vocab);
+      cuadroDirty = true;
+    }
+    cuadroIaBusy = false;
+    renderContent();
+    scheduleSave();
+    return;
+  }
+
+  if(esInglesSecundaria3ro4to && !tema && !vocab){
+    c.filas = CUADRO_PLANTILLA_INGLES_SECUNDARIA.map(fila=>({...fila}));
+  } else {
+    c.filas = generarFilasPlantilla(f.asignatura, tema, vocab);
+  }
+  cuadroDirty = true;
+  renderContent();
+  scheduleSave();
+}
+
+/* Lo que el docente llenó aquí también aparece como opción en los catálogos
+   de "Adecuación curricular" (ver adecCompetenciasCatalog/adecIndicadoresCatalog),
+   igual que ya ocurre con las Planificaciones. */
+function cuadroCompetenciasCatalog(courseId, asignatura){
+  if(!asignatura) return [];
+  const c = findCuadro(courseId, asignatura);
+  if(!c) return [];
+  return c.filas.map(fila=>(fila.especifica||'').trim()).filter(Boolean);
+}
+function cuadroIndicadoresCatalog(courseId, asignatura, periodo){
+  if(!asignatura) return [];
+  const c = findCuadro(courseId, asignatura);
+  if(!c) return [];
+  const campo = 'periodo'+periodo;
+  return c.filas.map(fila=>(fila[campo]||'').trim()).filter(Boolean);
+}
+
+function renderCuadroCurricular(){
+  autoSelectCuadroFilters();
+  const f = cuadroFilters;
+  const aulaLocked = applyAulaLock(f);
+  const centros = centrosList();
+  const grados = f.centro ? gradosList(f.centro) : [];
+  const secciones = (f.centro && f.grado) ? seccionesList(f.centro, f.grado) : [];
+  const course = (f.centro && f.grado && f.seccion) ? findCourseByFilters(f.centro, f.grado, f.seccion) : null;
+  const asignaturas = course ? courseSubjects(course) : [];
+
+  const filtersBar = aulaLocked ? `
+    <div class="filters-card">
+      <div class="cal-pub-hint" style="margin:0 0 ${asignaturas.length>1?'10px':'0'};">🔒 Mostrando solo <b>${escapeHtml(f.grado)} ${escapeHtml(f.seccion)}</b> · ${escapeHtml(f.centro)}. <a onclick="goPage('aula')" style="color:var(--blue); cursor:pointer;">Cambiar aula</a></div>
+      ${asignaturas.length>1 ? `
+      <select class="inst-filter-select" onchange="setCuadroFilter('asignatura', this.value)">
+        <option value="">Asignatura</option>
+        ${asignaturas.map(a=>`<option value="${escapeHtml(a)}" ${f.asignatura===a?'selected':''}>${escapeHtml(a)}</option>`).join('')}
+      </select>` : ''}
+    </div>
+  ` : `
+    <div class="filters-card">
+      <div class="inst-filters-grid">
+        <select class="inst-filter-select" onchange="setCuadroFilter('centro', this.value)">
+          <option value="">Centro</option>
+          ${centros.map(c=>`<option value="${escapeHtml(c)}" ${f.centro===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+        </select>
+        <select class="inst-filter-select" ${!f.centro?'disabled':''} onchange="setCuadroFilter('grado', this.value)">
+          <option value="">Grado</option>
+          ${grados.map(g=>`<option value="${escapeHtml(g)}" ${f.grado===g?'selected':''}>${escapeHtml(g)}</option>`).join('')}
+        </select>
+        <select class="inst-filter-select" ${!f.grado?'disabled':''} onchange="setCuadroFilter('seccion', this.value)">
+          <option value="">Sección</option>
+          ${secciones.map(s=>`<option value="${escapeHtml(s)}" ${f.seccion===s?'selected':''}>${escapeHtml(s)}</option>`).join('')}
+        </select>
+        <select class="inst-filter-select" ${!course?'disabled':''} onchange="setCuadroFilter('asignatura', this.value)">
+          <option value="">Asignatura</option>
+          ${asignaturas.map(a=>`<option value="${escapeHtml(a)}" ${f.asignatura===a?'selected':''}>${escapeHtml(a)}</option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+
+  const header = `
+    <h1 class="page-title">Cuadro Curricular</h1>
+    <div class="subtitle">Distribución oficial de competencias e indicadores de logro por periodo (1-4) para esta asignatura. Lo que escribas aquí también aparece como opción en <a onclick="goPage('adecuacion')" style="color:var(--blue); cursor:pointer; text-decoration:none;">Adecuación curricular</a>.</div>
+    ${filtersBar}`;
+
+  if(courses.length===0) return `${header}${instEmptyBlock('Aún no tienes aulas', 'Crea un aula en el módulo "Aula" para poder crear un cuadro curricular.')}`;
+  if(!f.centro) return `${header}${instEmptyBlock('Selecciona un centro', 'Elige un centro para ver sus cursos.')}`;
+  if(!f.grado) return `${header}${instEmptyBlock('Selecciona un grado', 'Elige un grado para continuar.')}`;
+  if(!f.seccion) return `${header}${instEmptyBlock('Selecciona una sección', 'Elige una sección para continuar.')}`;
+  if(!course) return `${header}${instEmptyBlock('Curso no encontrado', 'No hay un curso que coincida con esta combinación.')}`;
+  if(!f.asignatura) return `${header}${instEmptyBlock('Selecciona una asignatura', 'Elige la asignatura para ver su cuadro curricular.')}`;
+
+  const cuadro = ensureCuadro(course.id, f.asignatura);
+  const info = parseCourseName(course.name);
+  const iaKeySet = !!cuadroApiKey();
+
+  const toolbar = `
+    <div class="cc-toolbar">
+      <div class="result-count">${escapeHtml(f.asignatura)} · ${escapeHtml(f.grado)} ${escapeHtml(f.seccion)}${info.nivel && info.nivel!=='—' ? ' - '+escapeHtml(info.nivel) : ''}</div>
+      <div class="cc-toolbar-actions">
+        <input type="text" class="cc-ia-input" placeholder="Tema o unidad (opcional)" value="${escapeHtml(cuadroIaContexto)}" oninput="setCuadroIaContexto(this.value)" ${cuadroIaBusy?'disabled':''} />
+        <input type="text" class="cc-ia-input" placeholder="Vocabulario clave (opcional)" value="${escapeHtml(cuadroIaVocab)}" oninput="setCuadroIaVocab(this.value)" ${cuadroIaBusy?'disabled':''} />
+        <button class="btn btn-outline" onclick="generarCuadroConIA()" ${cuadroIaBusy?'disabled':''}>${cuadroIaBusy ? '⏳ Generando…' : (iaKeySet ? '🤖 Generar con IA' : '🤖 Rellenar con IA')}</button>
+        <button class="icon-btn" title="${iaKeySet ? 'Cambiar o quitar tu API key de IA real' : 'Usar IA real con tu propia API key de Anthropic'}" onclick="configurarIaReal()">⚙️</button>
+        <button class="btn ${cuadroDirty ? 'btn-primary' : 'btn-guardado'} btn-sm" onclick="guardarCuadro()">${cuadroDirty ? 'Guardar' : 'Guardado'}</button>
+      </div>
+    </div>
+    <div class="cc-hint">${iaKeySet
+      ? '🤖 <b>Modo IA real activado:</b> cada clic en "Generar con IA" llama a Claude con tu propia API key (guardada solo en este navegador) y devuelve un cuadro distinto, ajustado al tema y vocabulario que escribas. Pulsa ⚙️ para cambiarla o quitarla.'
+      : '🤖 <b>Rellenar con IA</b> genera un borrador variado cada vez que lo pulsas (motor por plantilla, sin backend), ajustado al tema y vocabulario que escribas; para Inglés de 3ro/4to de Secundaria, si los dejas vacíos, carga el cuadro oficial. Para respuestas generadas por un modelo real (Claude), pulsa ⚙️ y agrega tu propia API key.'}</div>`;
+
+  const table = `
+    <div class="cc-table-wrap">
+      <table class="cc-table">
+        <thead><tr>
+          <th>Competencia Fundamental</th>
+          <th>Competencia Específica del Grado</th>
+          ${CUADRO_PERIODO_LABELS.map(l=>`<th>${escapeHtml(l)}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${cuadro.filas.map((fila, idx)=>`
+            <tr>
+              <td class="cc-fund-cell">${escapeHtml(fila.fundamental)}</td>
+              <td><textarea rows="3" onchange="editCuadroCelda(${idx}, 'especifica', this.value)">${escapeHtml(fila.especifica)}</textarea></td>
+              <td><textarea rows="3" onchange="editCuadroCelda(${idx}, 'periodo1', this.value)">${escapeHtml(fila.periodo1)}</textarea></td>
+              <td><textarea rows="3" onchange="editCuadroCelda(${idx}, 'periodo2', this.value)">${escapeHtml(fila.periodo2)}</textarea></td>
+              <td><textarea rows="3" onchange="editCuadroCelda(${idx}, 'periodo3', this.value)">${escapeHtml(fila.periodo3)}</textarea></td>
+              <td><textarea rows="3" onchange="editCuadroCelda(${idx}, 'periodo4', this.value)">${escapeHtml(fila.periodo4)}</textarea></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  return `${header}${toolbar}${table}`;
 }
 
 /* =========================================================
@@ -7747,6 +8247,7 @@ function resetToBlankState(){
   calRegistro = {}; calGrades = {}; calCompetenciasHidden = false; calPublicacionHidden = false;
   attendance = {}; attendanceSaved = {}; attendancePublished = {};
   adecuaciones = []; recoveryPlans = []; ajustesIndividualizados = [];
+  cuadrosCurriculares = [];
   alfabetizacionInicial = []; experienciasDirectas = []; acompanantesRegistro = [];
   anecdotal = [];
   scheduleSlots = []; scheduleEntries = []; scheduleExtraDays = []; scheduleInfo = { periodo:'' };
@@ -7777,7 +8278,7 @@ function collectState(){
     perfil, courses, students, nextStudentId, plannings, instruments, mySequences,
     grades, calRegistro, calGrades, calCompetenciasHidden, calPublicacionHidden,
     attendance, attendanceSaved, attendancePublished,
-    adecuaciones, recoveryPlans, ajustesIndividualizados, alfabetizacionInicial, experienciasDirectas, acompanantesRegistro, anecdotal, scheduleSlots, scheduleEntries, scheduleExtraDays, scheduleInfo, boletinCentroInfo, boletinNotas, boletinObservaciones, agendaItems, resources,
+    adecuaciones, recoveryPlans, ajustesIndividualizados, cuadrosCurriculares, alfabetizacionInicial, experienciasDirectas, acompanantesRegistro, anecdotal, scheduleSlots, scheduleEntries, scheduleExtraDays, scheduleInfo, boletinCentroInfo, boletinNotas, boletinObservaciones, agendaItems, resources,
     docentesPendientes, docentesAprobados, permisosCentro, aulaGlobal
   };
 }
@@ -7803,6 +8304,7 @@ function applyState(s){
   if(Array.isArray(s.adecuaciones)) adecuaciones = s.adecuaciones;
   if(Array.isArray(s.recoveryPlans)) recoveryPlans = s.recoveryPlans;
   if(Array.isArray(s.ajustesIndividualizados)) ajustesIndividualizados = s.ajustesIndividualizados;
+  if(Array.isArray(s.cuadrosCurriculares)) cuadrosCurriculares = s.cuadrosCurriculares;
   if(Array.isArray(s.alfabetizacionInicial)) alfabetizacionInicial = s.alfabetizacionInicial;
   if(Array.isArray(s.experienciasDirectas)) experienciasDirectas = s.experienciasDirectas;
   if(Array.isArray(s.acompanantesRegistro)) acompanantesRegistro = s.acompanantesRegistro;
