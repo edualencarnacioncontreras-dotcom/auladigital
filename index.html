@@ -530,6 +530,11 @@
   .cc-table textarea:focus{outline:none; border-color:var(--blue); background:#fff;}
   .cc-ia-input{width:230px; padding:9px 11px; border:1px solid var(--border); border-radius:7px; font-size:12.5px; font-family:inherit;}
   .cc-hint{background:#fff; border:1px solid var(--border); border-radius:10px; padding:13px 16px; font-size:12.5px; color:var(--muted); margin-bottom:14px;}
+  .cc-list{display:flex; flex-direction:column; gap:10px;}
+  .cc-card{display:flex; justify-content:space-between; align-items:center; gap:14px; background:#fff; border:1px solid var(--border); border-radius:10px; padding:14px 16px; flex-wrap:wrap;}
+  .cc-card-title{font-weight:700; font-size:13.5px; color:var(--navy-2);}
+  .cc-card-meta{font-size:11.5px; color:var(--muted); margin-top:2px;}
+  .cc-card-actions{display:flex; gap:6px; align-items:center; flex-wrap:wrap;}
 
   /* ---- Recuperación y ajustes: fichas del curso entero ---- */
   .recup-row{border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:0 10px 10px;}
@@ -924,6 +929,45 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeInstModal()">Cancelar</button>
       <button class="btn btn-primary" id="instCreateBtn" disabled onclick="createInstrument()">Crear</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: nuevo Cuadro Curricular (tabla editable con IA, o archivo subido) -->
+<div class="overlay" id="cuadroNewOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Nuevo Cuadro Curricular</div>
+      <button class="modal-close" onclick="closeCuadroNewModal()">✕</button>
+    </div>
+    <div class="modal-sub">Para <b id="cuadroNewContext"></b>. Elige cómo quieres crearlo.</div>
+
+    <div class="type-option" data-ctype="tabla" onclick="selectCuadroNewType('tabla')">
+      <div class="type-icon">📝</div>
+      <div><div class="type-name">Tabla editable</div><div class="type-desc">Llénala a mano o pulsa "Rellenar con IA" una vez creada.</div></div>
+    </div>
+    <div class="type-option" data-ctype="archivo" onclick="selectCuadroNewType('archivo')">
+      <div class="type-icon">📎</div>
+      <div><div class="type-name">Subir un archivo</div><div class="type-desc">PDF, Word, Excel o una foto de tu cuadro curricular ya hecho.</div></div>
+    </div>
+
+    <div id="cuadroNewTablaFields" style="display:none;">
+      <div class="title-field" style="margin-top:8px;"><label>Título</label><input type="text" id="cuadroNewTituloInput" placeholder="Ej. Cuadro Curricular — Inglés" /></div>
+    </div>
+
+    <div id="cuadroNewArchivoFields" style="display:none;">
+      <div class="title-field" style="margin-top:8px;"><label>Título</label><input type="text" id="cuadroNewArchivoTituloInput" placeholder="Ej. Cuadro Curricular — Inglés" /></div>
+      <div class="field" style="margin-bottom:6px;">
+        <label>Archivo (PDF, Word, Excel o foto)</label>
+        <input type="file" id="cuadroNewFileInput" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,image/*" onchange="onCuadroFileChosen()" />
+      </div>
+      <div class="plan-meta" id="cuadroNewFileName" style="margin-bottom:14px;"></div>
+    </div>
+
+    <div class="hint-line" id="cuadroNewHint">Elige una opción arriba.</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeCuadroNewModal()">Cancelar</button>
+      <button class="btn btn-primary" id="cuadroNewCreateBtn" disabled onclick="confirmCrearCuadro()">Crear</button>
     </div>
   </div>
 </div>
@@ -5396,6 +5440,7 @@ let cuadroDirty = false;
 let cuadroIaContexto = '';
 let cuadroIaVocab = '';
 let cuadroIaBusy = false;
+let cuadroEditingId = null; // id del cuadro que se está editando; null = mostrando la lista
 
 const CUADRO_COMPETENCIAS_FUNDAMENTALES = [
   'COMUNICATIVA',
@@ -5408,23 +5453,195 @@ const CUADRO_COMPETENCIAS_FUNDAMENTALES = [
 ];
 const CUADRO_PERIODO_LABELS = ['PERIODO 1\nComprensión','PERIODO 2\nProducción','PERIODO 3\nInteracción','PERIODO 4\nIntegración y consolidación'];
 
-let cuadrosCurriculares = []; // {id, courseId, asignatura, filas:[{fundamental, especifica, periodo1..4}]}
+let cuadrosCurriculares = []; // {id, courseId, asignatura, titulo, filas:[{fundamental, especifica, periodo1..4}], updatedAt}
 
 function blankCuadroFilas(){
   return CUADRO_COMPETENCIAS_FUNDAMENTALES.map(f=>({fundamental:f, especifica:'', periodo1:'', periodo2:'', periodo3:'', periodo4:''}));
 }
-function findCuadro(courseId, asignatura){
-  return cuadrosCurriculares.find(c=>c.courseId===courseId && c.asignatura===asignatura);
+/* Todos los cuadros guardados para un curso+asignatura, más recientes primero. */
+function cuadrosDeCurso(courseId, asignatura){
+  return cuadrosCurriculares
+    .filter(c=>c.courseId===courseId && c.asignatura===asignatura)
+    .sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
 }
-function ensureCuadro(courseId, asignatura){
-  let c = findCuadro(courseId, asignatura);
-  if(!c){
-    c = { id:uid(), courseId, asignatura, filas: blankCuadroFilas() };
-    cuadrosCurriculares.push(c);
+function currentCuadro(){
+  return cuadrosCurriculares.find(c=>c.id===cuadroEditingId) || null;
+}
+/* ---- Modal "Nuevo Cuadro Curricular": tabla editable o archivo subido ---- */
+let cuadroNewType = null;
+let cuadroNewFile = null;
+let cuadroNewCourseId = null;
+let cuadroNewAsignatura = '';
+
+function openCuadroNewModal(courseId, asignatura){
+  cuadroNewType = null;
+  cuadroNewFile = null;
+  cuadroNewCourseId = courseId;
+  cuadroNewAsignatura = asignatura;
+  document.getElementById('cuadroNewContext').textContent = asignatura;
+  document.querySelectorAll('#cuadroNewOverlay .type-option').forEach(n=>n.classList.remove('selected'));
+  document.getElementById('cuadroNewTablaFields').style.display = 'none';
+  document.getElementById('cuadroNewArchivoFields').style.display = 'none';
+  document.getElementById('cuadroNewTituloInput').value = `Cuadro Curricular — ${asignatura}`;
+  document.getElementById('cuadroNewArchivoTituloInput').value = `Cuadro Curricular — ${asignatura}`;
+  document.getElementById('cuadroNewFileInput').value = '';
+  document.getElementById('cuadroNewFileName').textContent = '';
+  document.getElementById('cuadroNewHint').textContent = 'Elige una opción arriba.';
+  document.getElementById('cuadroNewCreateBtn').disabled = true;
+  document.getElementById('cuadroNewOverlay').classList.add('show');
+}
+function closeCuadroNewModal(){ document.getElementById('cuadroNewOverlay').classList.remove('show'); }
+function selectCuadroNewType(type){
+  cuadroNewType = type;
+  document.querySelectorAll('#cuadroNewOverlay .type-option').forEach(n=>n.classList.toggle('selected', n.dataset.ctype===type));
+  document.getElementById('cuadroNewTablaFields').style.display = type==='tabla' ? '' : 'none';
+  document.getElementById('cuadroNewArchivoFields').style.display = type==='archivo' ? '' : 'none';
+  if(type==='tabla'){
+    document.getElementById('cuadroNewHint').textContent = 'Puedes escribirla a mano o generarla con "Rellenar con IA" una vez creada.';
+    document.getElementById('cuadroNewCreateBtn').disabled = false;
+  } else {
+    document.getElementById('cuadroNewHint').textContent = 'Selecciona el archivo a subir (PDF, Word, Excel o foto).';
+    document.getElementById('cuadroNewCreateBtn').disabled = !cuadroNewFile;
   }
-  // Por si un cuadro quedó guardado con menos filas que el marco actual (no debería pasar, pero cubre datos antiguos)
-  if(!Array.isArray(c.filas) || c.filas.length===0) c.filas = blankCuadroFilas();
-  return c;
+}
+function onCuadroFileChosen(){
+  const input = document.getElementById('cuadroNewFileInput');
+  const file = input.files && input.files[0];
+  const nameEl = document.getElementById('cuadroNewFileName');
+  const btn = document.getElementById('cuadroNewCreateBtn');
+  if(!file){ cuadroNewFile=null; nameEl.textContent=''; btn.disabled=true; return; }
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  const isWord = /\.docx?$/i.test(file.name) || file.type.includes('word');
+  const isExcel = /\.(xlsx|xls|csv)$/i.test(file.name) || file.type.includes('sheet') || file.type.includes('excel');
+  const isImage = file.type.startsWith('image/');
+  if(!isPdf && !isWord && !isExcel && !isImage){
+    nameEl.textContent = 'Formato no soportado. Usa PDF, Word, Excel o una foto.';
+    cuadroNewFile = null;
+    btn.disabled = true;
+    return;
+  }
+  const kind = isPdf ? 'PDF' : isWord ? 'Word' : isExcel ? 'Excel' : 'Foto';
+  nameEl.textContent = `📎 Leyendo ${file.name}...`;
+  btn.disabled = true;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    cuadroNewFile = { name:file.name, kind, mime:file.type, dataUrl:e.target.result };
+    nameEl.textContent = `📎 ${file.name} (${kind})`;
+    btn.disabled = false;
+  };
+  reader.onerror = function(){
+    nameEl.textContent = 'No se pudo leer el archivo. Intenta de nuevo.';
+    cuadroNewFile = null;
+  };
+  reader.readAsDataURL(file);
+}
+function confirmCrearCuadro(){
+  if(!cuadroNewType) return;
+  if(cuadroNewType==='tabla'){
+    const titulo = document.getElementById('cuadroNewTituloInput').value.trim() || `Cuadro Curricular — ${cuadroNewAsignatura}`;
+    const c = { id:uid(), courseId:cuadroNewCourseId, asignatura:cuadroNewAsignatura, titulo, origen:'tabla', filas: blankCuadroFilas(), updatedAt: Date.now() };
+    cuadrosCurriculares.push(c);
+    cuadroEditingId = c.id;
+    cuadroDirty = false;
+    closeCuadroNewModal();
+    renderContent();
+    scheduleSave();
+  } else if(cuadroNewType==='archivo'){
+    if(!cuadroNewFile) return;
+    const titulo = document.getElementById('cuadroNewArchivoTituloInput').value.trim() || cuadroNewFile.name;
+    const c = {
+      id:uid(), courseId:cuadroNewCourseId, asignatura:cuadroNewAsignatura, titulo, origen:'archivo',
+      fileName:cuadroNewFile.name, fileKind:cuadroNewFile.kind, fileMime:cuadroNewFile.mime, fileDataUrl:cuadroNewFile.dataUrl,
+      filas: blankCuadroFilas(), updatedAt: Date.now()
+    };
+    cuadrosCurriculares.push(c);
+    cuadroNewFile = null;
+    closeCuadroNewModal();
+    renderContent(); // se queda en la lista: el archivo subido aparece de una vez
+    scheduleSave();
+  }
+}
+
+/* Vista previa (sin descargar) de un Cuadro Curricular subido como archivo,
+   reutilizando el mismo modal de vista previa de Planificaciones. Excel se
+   muestra como tabla HTML con SheetJS (ya cargado en la app); Word con
+   mammoth.js; PDF e imágenes directamente. */
+function previewCuadroFile(id){
+  const c = cuadrosCurriculares.find(x=>x.id===id);
+  if(!c || !c.fileDataUrl) return;
+  document.getElementById('filePreviewName').textContent = c.fileName;
+  const body = document.getElementById('filePreviewBody');
+  const downloadBtn = document.getElementById('filePreviewDownloadBtn');
+  downloadBtn.onclick = function(){ descargarArchivoCuadro(c.id); };
+
+  if(c.fileKind === 'PDF'){
+    body.innerHTML = `<iframe src="${c.fileDataUrl}" style="border:none;width:100%;height:65vh;display:block;"></iframe>`;
+  } else if(c.fileKind === 'Foto'){
+    body.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;padding:14px;"><img src="${c.fileDataUrl}" style="max-width:100%;max-height:65vh;"/></div>`;
+  } else if(c.fileKind === 'Word'){
+    body.innerHTML = `<div style="padding:24px;color:var(--muted);font-size:13px;">Cargando vista previa del documento…</div>`;
+    fetch(c.fileDataUrl)
+      .then(r => r.arrayBuffer())
+      .then(buf => mammoth.convertToHtml({ arrayBuffer: buf }))
+      .then(result => {
+        body.innerHTML = `<div style="background:#fff;padding:24px;font-size:13.5px;line-height:1.5;">${result.value || '<i>El documento no tiene contenido de texto visible.</i>'}</div>`;
+      })
+      .catch(() => {
+        body.innerHTML = `<div style="padding:24px;color:var(--red);font-size:13px;">No se pudo generar la vista previa de este archivo Word. Usa "Descargar" para abrirlo en tu computadora.</div>`;
+      });
+  } else if(c.fileKind === 'Excel'){
+    body.innerHTML = `<div style="padding:24px;color:var(--muted);font-size:13px;">Cargando vista previa de la hoja de cálculo…</div>`;
+    fetch(c.fileDataUrl)
+      .then(r => r.arrayBuffer())
+      .then(buf => {
+        const wb = XLSX.read(buf, {type:'array'});
+        const primeraHoja = wb.SheetNames[0];
+        const html = XLSX.utils.sheet_to_html(wb.Sheets[primeraHoja]);
+        body.innerHTML = `<div style="background:#fff;padding:16px;font-size:12.5px;overflow:auto;">${html}</div>`;
+      })
+      .catch(() => {
+        body.innerHTML = `<div style="padding:24px;color:var(--red);font-size:13px;">No se pudo generar la vista previa de esta hoja de cálculo. Usa "Descargar" para abrirla.</div>`;
+      });
+  } else {
+    body.innerHTML = `<div style="padding:24px;color:var(--muted);font-size:13px;">Vista previa no disponible para este tipo de archivo. Usa "Descargar" para abrirlo.</div>`;
+  }
+  document.getElementById('filePreviewOverlay').classList.add('show');
+}
+function descargarArchivoCuadro(id){
+  const c = cuadrosCurriculares.find(x=>x.id===id);
+  if(!c || !c.fileDataUrl) return;
+  const a = document.createElement('a');
+  a.href = c.fileDataUrl;
+  a.download = c.fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+function abrirCuadro(id){
+  cuadroEditingId = id;
+  cuadroDirty = false;
+  renderContent();
+}
+function volverListaCuadros(){
+  cuadroEditingId = null;
+  renderContent();
+}
+function eliminarCuadro(id){
+  if(!confirm('¿Eliminar este cuadro curricular? Esta acción no se puede deshacer.')) return;
+  cuadrosCurriculares = cuadrosCurriculares.filter(c=>c.id!==id);
+  if(cuadroEditingId===id) cuadroEditingId = null;
+  renderContent();
+  scheduleSave();
+}
+function renombrarCuadro(id){
+  const c = cuadrosCurriculares.find(x=>x.id===id);
+  if(!c) return;
+  const nuevo = prompt('Nuevo nombre para este cuadro curricular:', c.titulo);
+  if(nuevo===null) return;
+  c.titulo = nuevo.trim() || c.titulo;
+  c.updatedAt = Date.now();
+  renderContent();
+  scheduleSave();
 }
 
 function autoSelectCuadroFilters(){
@@ -5453,6 +5670,7 @@ function setCuadroFilter(key, value){
   if(key==='centro'){ cuadroFilters.grado=''; cuadroFilters.seccion=''; cuadroFilters.asignatura=''; }
   if(key==='grado'){ cuadroFilters.seccion=''; cuadroFilters.asignatura=''; }
   if(key==='seccion'){ cuadroFilters.asignatura=''; }
+  cuadroEditingId = null;
   renderContent();
 }
 function setCuadroIaContexto(v){ cuadroIaContexto = v; }
@@ -5475,19 +5693,25 @@ function configurarIaReal(){
 }
 
 function editCuadroCelda(filaIdx, campo, valor){
-  const f = cuadroFilters;
-  const course = findCourseByFilters(f.centro, f.grado, f.seccion);
-  if(!course || !f.asignatura) return;
-  const c = ensureCuadro(course.id, f.asignatura);
-  if(!c.filas[filaIdx]) return;
+  const c = currentCuadro();
+  if(!c || !c.filas[filaIdx]) return;
   c.filas[filaIdx][campo] = valor;
+  c.updatedAt = Date.now();
   cuadroDirty = true;
   scheduleSave();
 }
 function guardarCuadro(){
+  const c = currentCuadro();
+  if(!c) return;
+  c.updatedAt = Date.now();
   cuadroDirty = false;
-  renderContent();
+  const courseId = c.courseId;
+  const asignatura = c.asignatura;
+  volverListaCuadros(); // vuelve a la lista: ahí se ve que quedó guardado
   scheduleSave();
+  if(confirm('Cuadro guardado. ¿Quieres crear otro cuadro curricular ahora (tabla en blanco o subir un archivo)?')){
+    openCuadroNewModal(courseId, asignatura);
+  }
 }
 
 /* Devuelve un elemento al azar de un arreglo (para que cada clic en
@@ -5690,10 +5914,9 @@ const CUADRO_PLANTILLA_INGLES_SECUNDARIA = [
 
 async function generarCuadroConIA(){
   if(cuadroIaBusy) return;
+  const c = currentCuadro();
+  if(!c) return;
   const f = cuadroFilters;
-  const course = findCourseByFilters(f.centro, f.grado, f.seccion);
-  if(!course || !f.asignatura) return;
-  const c = ensureCuadro(course.id, f.asignatura);
   const asigNorm = f.asignatura.trim().toLowerCase();
   const gradoNorm = (f.grado||'').trim().toLowerCase();
   const tema = (cuadroIaContexto||'').trim();
@@ -5712,6 +5935,7 @@ async function generarCuadroConIA(){
       c.filas = generarFilasPlantilla(f.asignatura, tema, vocab);
       cuadroDirty = true;
     }
+    c.updatedAt = Date.now();
     cuadroIaBusy = false;
     renderContent();
     scheduleSave();
@@ -5723,6 +5947,7 @@ async function generarCuadroConIA(){
   } else {
     c.filas = generarFilasPlantilla(f.asignatura, tema, vocab);
   }
+  c.updatedAt = Date.now();
   cuadroDirty = true;
   renderContent();
   scheduleSave();
@@ -5733,16 +5958,20 @@ async function generarCuadroConIA(){
    igual que ya ocurre con las Planificaciones. */
 function cuadroCompetenciasCatalog(courseId, asignatura){
   if(!asignatura) return [];
-  const c = findCuadro(courseId, asignatura);
-  if(!c) return [];
-  return c.filas.map(fila=>(fila.especifica||'').trim()).filter(Boolean);
+  const out = [];
+  cuadrosDeCurso(courseId, asignatura).forEach(c=>c.filas.forEach(fila=>{
+    if(fila.especifica && fila.especifica.trim()) out.push(fila.especifica.trim());
+  }));
+  return out;
 }
 function cuadroIndicadoresCatalog(courseId, asignatura, periodo){
   if(!asignatura) return [];
-  const c = findCuadro(courseId, asignatura);
-  if(!c) return [];
   const campo = 'periodo'+periodo;
-  return c.filas.map(fila=>(fila[campo]||'').trim()).filter(Boolean);
+  const out = [];
+  cuadrosDeCurso(courseId, asignatura).forEach(c=>c.filas.forEach(fila=>{
+    if(fila[campo] && fila[campo].trim()) out.push(fila[campo].trim());
+  }));
+  return out;
 }
 
 function renderCuadroCurricular(){
@@ -5798,19 +6027,64 @@ function renderCuadroCurricular(){
   if(!course) return `${header}${instEmptyBlock('Curso no encontrado', 'No hay un curso que coincida con esta combinación.')}`;
   if(!f.asignatura) return `${header}${instEmptyBlock('Selecciona una asignatura', 'Elige la asignatura para ver su cuadro curricular.')}`;
 
-  const cuadro = ensureCuadro(course.id, f.asignatura);
+  const lista = cuadrosDeCurso(course.id, f.asignatura);
+  if(cuadroEditingId && !lista.some(c=>c.id===cuadroEditingId)) cuadroEditingId = null;
+  const cuadro = cuadroEditingId ? lista.find(c=>c.id===cuadroEditingId) : null;
   const info = parseCourseName(course.name);
+
+  /* ---- Vista de lista: crear nuevo / vista previa / editar / eliminar ---- */
+  if(!cuadro){
+    const listBody = lista.length===0
+      ? instEmptyBlock('Aún no hay cuadros curriculares', 'Crea el primero para esta asignatura con el botón de arriba.')
+      : `<div class="cc-list">
+          ${lista.map(c=>{
+            const esArchivo = c.origen === 'archivo';
+            const acciones = esArchivo
+              ? `<button class="btn btn-secondary btn-sm" onclick="previewCuadroFile(${c.id})">👁 Ver archivo</button>
+                 <button class="btn btn-secondary btn-sm" onclick="descargarArchivoCuadro(${c.id})">⬇ Descargar</button>`
+              : `<button class="btn btn-secondary btn-sm" onclick="verCuadroCurricular(${c.id})">👁 Vista previa</button>
+                 <button class="btn btn-secondary btn-sm" onclick="abrirCuadro(${c.id})">✏️ Editar</button>`;
+            const metaTxt = esArchivo ? `Archivo ${escapeHtml(c.fileKind||'')} · ` : '';
+            return `
+            <div class="cc-card">
+              <div class="cc-card-main">
+                <div class="cc-card-title">${esArchivo?'📎 ':''}${escapeHtml(c.titulo)}</div>
+                <div class="cc-card-meta">${metaTxt}Actualizado ${new Date(c.updatedAt||0).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'})}</div>
+              </div>
+              <div class="cc-card-actions">
+                ${acciones}
+                <button class="icon-btn" title="Renombrar" onclick="renombrarCuadro(${c.id})">✎</button>
+                <button class="icon-btn danger" title="Eliminar" onclick="eliminarCuadro(${c.id})">🗑</button>
+              </div>
+            </div>`;}).join('')}
+        </div>`;
+    return `${header}
+      <div class="cc-toolbar">
+        <div class="result-count">${lista.length} cuadro${lista.length===1?'':'s'} curricular${lista.length===1?'':'es'} · ${escapeHtml(f.asignatura)}</div>
+        <button class="btn btn-primary btn-sm" onclick="openCuadroNewModal(${course.id}, '${escJs(f.asignatura)}')">+ Nuevo cuadro curricular</button>
+      </div>
+      ${listBody}`;
+  }
+
+  /* ---- Vista de edición del cuadro seleccionado ---- */
   const iaKeySet = !!cuadroApiKey();
 
   const toolbar = `
     <div class="cc-toolbar">
-      <div class="result-count">${escapeHtml(f.asignatura)} · ${escapeHtml(f.grado)} ${escapeHtml(f.seccion)}${info.nivel && info.nivel!=='—' ? ' - '+escapeHtml(info.nivel) : ''}</div>
+      <div class="result-count">
+        <a onclick="volverListaCuadros()" style="color:var(--blue); cursor:pointer; text-decoration:none;">← Cuadros curriculares</a>
+        &nbsp;·&nbsp;<b>${escapeHtml(cuadro.titulo)}</b>
+        <button class="icon-btn" title="Renombrar" onclick="renombrarCuadro(${cuadro.id})" style="margin-left:6px; width:24px; height:24px; font-size:11px;">✎</button>
+        <div style="font-size:11.5px; color:var(--muted); margin-top:2px;">${escapeHtml(f.asignatura)} · ${escapeHtml(f.grado)} ${escapeHtml(f.seccion)}${info.nivel && info.nivel!=='—' ? ' - '+escapeHtml(info.nivel) : ''}</div>
+      </div>
       <div class="cc-toolbar-actions">
         <input type="text" class="cc-ia-input" placeholder="Tema o unidad (opcional)" value="${escapeHtml(cuadroIaContexto)}" oninput="setCuadroIaContexto(this.value)" ${cuadroIaBusy?'disabled':''} />
         <input type="text" class="cc-ia-input" placeholder="Vocabulario clave (opcional)" value="${escapeHtml(cuadroIaVocab)}" oninput="setCuadroIaVocab(this.value)" ${cuadroIaBusy?'disabled':''} />
         <button class="btn btn-outline" onclick="generarCuadroConIA()" ${cuadroIaBusy?'disabled':''}>${cuadroIaBusy ? '⏳ Generando…' : (iaKeySet ? '🤖 Generar con IA' : '🤖 Rellenar con IA')}</button>
         <button class="icon-btn" title="${iaKeySet ? 'Cambiar o quitar tu API key de IA real' : 'Usar IA real con tu propia API key de Anthropic'}" onclick="configurarIaReal()">⚙️</button>
+        <button class="btn btn-secondary btn-sm" onclick="verCuadroCurricular(${cuadro.id})">👁 Vista previa</button>
         <button class="btn ${cuadroDirty ? 'btn-primary' : 'btn-guardado'} btn-sm" onclick="guardarCuadro()">${cuadroDirty ? 'Guardar' : 'Guardado'}</button>
+        <button class="icon-btn danger" title="Eliminar este cuadro" onclick="eliminarCuadro(${cuadro.id})">🗑</button>
       </div>
     </div>
     <div class="cc-hint">${iaKeySet
@@ -5840,6 +6114,62 @@ function renderCuadroCurricular(){
     </div>`;
 
   return `${header}${toolbar}${table}`;
+}
+
+/* Arma una página HTML autocontenida con estilo de documento imprimible
+   (mismo patrón que buildPlanificacionHtml) y la abre en una pestaña nueva:
+   es la "Vista previa" de solo lectura, lista para imprimir o guardar como PDF. */
+function buildCuadroHtml(cuadro, course, asignatura){
+  const info = parseCourseName(course.name);
+  const filas = cuadro.filas.map(fila=>`
+    <tr>
+      <td class="fund">${escapeHtml(fila.fundamental)}</td>
+      <td>${escapeHtml(fila.especifica).replace(/\n/g,'<br>')}</td>
+      <td>${escapeHtml(fila.periodo1).replace(/\n/g,'<br>')}</td>
+      <td>${escapeHtml(fila.periodo2).replace(/\n/g,'<br>')}</td>
+      <td>${escapeHtml(fila.periodo3).replace(/\n/g,'<br>')}</td>
+      <td>${escapeHtml(fila.periodo4).replace(/\n/g,'<br>')}</td>
+    </tr>`).join('');
+  return `
+    <html>
+    <head>
+      <meta charset="UTF-8" />
+      <title>${escapeHtml(cuadro.titulo)}</title>
+      <style>
+        *{box-sizing:border-box;}
+        body{font-family:Calibri, Arial, "Segoe UI", sans-serif; padding:26px 30px; color:#111; margin:0 auto; font-size:11.5px;}
+        h1{font-size:16px; margin:0 0 2px;}
+        .meta{font-size:12px; color:#555; margin-bottom:16px;}
+        table{width:100%; border-collapse:collapse; table-layout:fixed;}
+        th,td{border:1px solid #9fb2c9; padding:7px 8px; vertical-align:top; text-align:left;}
+        th{background:#dbe5f1; font-size:10.5px; text-transform:uppercase;}
+        td.fund{font-weight:700; background:#f2f5f9; font-size:10.5px; width:14%;}
+        @media print{ body{padding:0;} th{-webkit-print-color-adjust:exact; print-color-adjust:exact;} td.fund{-webkit-print-color-adjust:exact; print-color-adjust:exact;} }
+      </style>
+    </head>
+    <body>
+      <h1>${escapeHtml(cuadro.titulo)}</h1>
+      <div class="meta">${escapeHtml(asignatura)} · ${escapeHtml(course.name)}${info.nivel && info.nivel!=='—' ? ' · '+escapeHtml(info.nivel) : ''}</div>
+      <table>
+        <thead><tr>
+          <th>Competencia Fundamental</th>
+          <th>Competencia Específica del Grado</th>
+          ${CUADRO_PERIODO_LABELS.map(l=>`<th>${escapeHtml(l.replace('\n',' — '))}</th>`).join('')}
+        </tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </body>
+    </html>`;
+}
+function verCuadroCurricular(id){
+  const cuadro = cuadrosCurriculares.find(c=>c.id===id);
+  if(!cuadro) return;
+  const course = courses.find(c=>c.id===cuadro.courseId);
+  if(!course) return;
+  const w = window.open('', '_blank');
+  if(!w) return;
+  w.document.write(buildCuadroHtml(cuadro, course, cuadro.asignatura));
+  w.document.close();
 }
 
 /* =========================================================
@@ -8248,6 +8578,7 @@ function resetToBlankState(){
   attendance = {}; attendanceSaved = {}; attendancePublished = {};
   adecuaciones = []; recoveryPlans = []; ajustesIndividualizados = [];
   cuadrosCurriculares = [];
+  cuadroEditingId = null; cuadroDirty = false; cuadroIaContexto = ''; cuadroIaVocab = ''; cuadroIaBusy = false;
   alfabetizacionInicial = []; experienciasDirectas = []; acompanantesRegistro = [];
   anecdotal = [];
   scheduleSlots = []; scheduleEntries = []; scheduleExtraDays = []; scheduleInfo = { periodo:'' };
